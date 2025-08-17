@@ -120,3 +120,8 @@ site-builder --config /root/.config/walrus/site-config.yaml  --context testnet d
 http://1z95qybnrqtkofhf7w3y5gu2e3osq7jpemsv1tczhvff4wwswo.localhost:3000
 incorrect -> 
 http://1z95qybnrqtkofhf7w3y5gu2e3osq7jpemsv1tczhvff4wwswo.buildonwalrus.dev
+
+
+
+<!-- docker image push -->
+docker tag walrus-deployment deepsp94/walrus-deployment

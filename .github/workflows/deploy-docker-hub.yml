@@ -1,0 +1,236 @@
+name: Deploy to Walrus using Docker Hub Image
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Network to deploy to'
+        required: true
+        default: 'testnet'
+        type: choice
+        options:
+        - testnet
+        - mainnet
+      epochs:
+        description: 'Storage duration in epochs (testnet: 1 epoch = 2 days, mainnet: 1 epoch = 14 days)'
+        required: true
+        default: '1'
+        type: string
+
+env:
+  NETWORK: ${{ github.event.inputs.network || 'testnet' }}
+  EPOCHS: ${{ github.event.inputs.epochs || '1' }}
+  DOCKER_IMAGE: deepsp94/walrus-deployment:latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      site_url: ${{ steps.deploy.outputs.site_url }}
+      deployment_id: ${{ steps.deploy.outputs.deployment_id }}
+      epochs_used: ${{ steps.deploy.outputs.epochs_used }}
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Pull Docker image from Docker Hub
+      run: |
+        echo "🐳 Pulling Docker image: $DOCKER_IMAGE"
+        docker pull $DOCKER_IMAGE
+        echo "✅ Docker image pulled successfully"
+        
+    - name: Install dependencies and build (if package.json exists)
+      if: hashFiles('package.json') != ''
+      run: |
+        npm ci
+        npm run build
+    
+    - name: Verify dist directory exists
+      run: |
+        if [ ! -d "./dist" ]; then
+          echo "❌ Error: ./dist directory not found!"
+          echo "Please ensure your build process creates a ./dist directory with static files."
+          exit 1
+        fi
+        echo "✅ Found ./dist directory with $(find ./dist -type f | wc -l) files"
+        
+    - name: Prepare environment file
+      env:
+        SUI_PRIVATE_KEY: ${{ secrets.SUI_PRIVATE_KEY }}
+        SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
+      run: |
+        # Validate required secrets
+        if [ -z "$SUI_PRIVATE_KEY" ] || [ -z "$SUI_ADDRESS" ]; then
+          echo "❌ Error: SUI_PRIVATE_KEY and SUI_ADDRESS secrets must be set in repository settings"
+          echo "Please add these secrets to your GitHub repository:"
+          echo "  - SUI_PRIVATE_KEY: Your Sui wallet private key"
+          echo "  - SUI_ADDRESS: Your Sui wallet address"
+          exit 1
+        fi
+        
+        # Create .env file for Docker container
+        cat > .env << EOF
+        SUI_PRIVATE_KEY=$SUI_PRIVATE_KEY
+        SUI_ADDRESS=$SUI_ADDRESS
+        NETWORK=$NETWORK
+        EPOCHS=$EPOCHS
+        EOF
+        
+        echo "✅ Environment file prepared"
+        
+    - name: Setup Sui wallet in container and deploy
+      id: deploy
+      env:
+        SUI_PRIVATE_KEY: ${{ secrets.SUI_PRIVATE_KEY }}
+        SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
+      run: |
+        echo "🚀 Starting Walrus deployment using Docker container..."
+        
+        # Run Docker container with proper configuration
+        DEPLOY_OUTPUT=$(docker run --rm \
+          -v "$(pwd)/dist:/dist" \
+          -v "$(pwd)/config/walrus-client.yaml:/root/.config/walrus/client_config.yaml" \
+          -v "$(pwd)/config/walrus-site.yaml:/root/.config/walrus/site-config.yaml" \
+          --env-file .env \
+          $DOCKER_IMAGE \
+          /bin/bash -c "
+            set -e
+            echo '🔧 Setting up Sui wallet configuration...'
+            
+            # Create necessary directories
+            mkdir -p ~/.sui/sui_config
+            
+            # Create Sui client config
+            cat > ~/.sui/sui_config/client.yaml << EOF
+        keystore:
+          File: ~/.sui/sui_config/sui.keystore
+        envs:
+          - alias: $NETWORK
+            rpc: \"https://fullnode.$NETWORK.sui.io:443\"
+            ws: ~
+        active_env: $NETWORK
+        active_address: \"$SUI_ADDRESS\"
+        EOF
+            
+            # Create keystore with private key
+            echo \"$SUI_PRIVATE_KEY\" > ~/.sui/sui_config/sui.keystore
+            
+            # Verify wallet setup
+            echo '✅ Verifying Sui wallet configuration...'
+            sui client active-address
+            
+            # Check balance for testnet and fund if needed
+            if [ \"$NETWORK\" = \"testnet\" ]; then
+              echo '💰 Checking wallet balance...'
+              BALANCE=\$(sui client gas --json 2>/dev/null | jq -r '.[0].balance // 0' || echo '0')
+              echo \"Current balance: \$BALANCE MIST\"
+              
+              if [ \"\$BALANCE\" -lt \"1000000000\" ]; then
+                echo '💰 Balance low, requesting from testnet faucet...'
+                curl -X POST \"https://faucet.testnet.sui.io/gas\" \
+                  -H \"Content-Type: application/json\" \
+                  -d \"{\\\"FixedAmountRequest\\\":{\\\"recipient\\\":\\\"\$SUI_ADDRESS\\\"}}\" \
+                  --silent --show-error || echo 'Faucet request may have failed, continuing...'
+                
+                # Wait for faucet transaction
+                sleep 15
+                
+                NEW_BALANCE=\$(sui client gas --json 2>/dev/null | jq -r '.[0].balance // 0' || echo '0')
+                echo \"New balance: \$NEW_BALANCE MIST\"
+              else
+                echo '✅ Sufficient balance available'
+              fi
+            fi
+            
+            # Get WAL tokens
+            echo '🪙 Getting WAL tokens...'
+            walrus get-wal || echo 'WAL token request may have failed, continuing...'
+            
+            # Deploy to Walrus
+            echo '🚀 Deploying to Walrus (\$NETWORK) for \$EPOCHS epochs...'
+            site-builder --config /root/.config/walrus/site-config.yaml \
+                        --context \"\$NETWORK\" \
+                        deploy /dist \
+                        --epochs \"\$EPOCHS\"
+          " 2>&1)
+        
+        echo "$DEPLOY_OUTPUT"
+        
+        # Extract site URL from output
+        SITE_ID=$(echo "$DEPLOY_OUTPUT" | grep -o 'http://[a-z0-9]*\.localhost:3000' | sed 's/http:\/\///' | sed 's/\.localhost:3000//' | head -1)
+        
+        if [ -n "$SITE_ID" ]; then
+          if [ "$NETWORK" = "mainnet" ]; then
+            SITE_URL="https://${SITE_ID}.walrus.site"
+          else
+            SITE_URL="https://${SITE_ID}.buildonwalrus.dev"
+          fi
+          
+          echo "✅ Deployment successful!"
+          echo "🌐 Site URL: $SITE_URL"
+          echo "⏰ Storage duration: $EPOCHS epochs"
+          
+          # Set outputs
+          echo "site_url=$SITE_URL" >> $GITHUB_OUTPUT
+          echo "deployment_id=$SITE_ID" >> $GITHUB_OUTPUT
+          echo "epochs_used=$EPOCHS" >> $GITHUB_OUTPUT
+          
+          # Create deployment summary
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎉 Walrus Deployment Successful (Docker Hub)
+          
+          **Docker Image:** \`$DOCKER_IMAGE\`  
+          **Network:** $NETWORK  
+          **Site URL:** [$SITE_URL]($SITE_URL)  
+          **Deployment ID:** \`$SITE_ID\`  
+          **Storage Duration:** $EPOCHS epochs  
+          **Expires:** $(date -d "+$(($EPOCHS * $([ "$NETWORK" = "mainnet" ] && echo 14 || echo 2))) days" '+%Y-%m-%d')
+          
+          Your site is now live on the Walrus decentralized storage network! 🎊
+          EOF
+        else
+          echo "❌ Failed to extract site URL from deployment output"
+          echo "Full output:"
+          echo "$DEPLOY_OUTPUT"
+          exit 1
+        fi
+        
+    - name: Cleanup
+      if: always()
+      run: |
+        # Remove .env file for security
+        rm -f .env
+        echo "✅ Cleanup completed"
+        
+    - name: Comment on PR (if applicable)
+      if: github.event_name == 'pull_request' && steps.deploy.outputs.site_url
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const siteUrl = '${{ steps.deploy.outputs.site_url }}';
+          const network = '${{ env.NETWORK }}';
+          const epochs = '${{ env.EPOCHS }}';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🌐 Walrus Preview Deployment (Docker Hub)
+            
+            Your site has been deployed to Walrus **${network}** using Docker image \`deepsp94/walrus-deployment:latest\`!
+            
+            **🔗 Preview URL:** ${siteUrl}
+            **⏰ Storage Duration:** ${epochs} epochs
+            **🌐 Network:** ${network}
+            
+            This deployment will be available for ${epochs} epochs (${network === 'mainnet' ? epochs * 14 : epochs * 2} days).`
+          });
