@@ -1,4 +1,4 @@
-name: Deploy to Walrus (Docker)
+name: Deploy to Walrus
 
 on:
   push:
@@ -33,11 +33,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    container: 
-      image: ghcr.io/${{ github.repository_owner }}/walrus-deployment:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
     
     outputs:
       site_url: ${{ steps.deploy.outputs.site_url }}
@@ -48,10 +43,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       
-    - name: Setup Walrus environment
-      run: walrus-setup $NETWORK
-      
-    - name: Install dependencies and build (if package.json exists)
+    - name: Setup Node.js (if package.json exists)
+      if: hashFiles('package.json') != ''
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies and build (if needed)
       if: hashFiles('package.json') != ''
       run: |
         npm ci
@@ -65,6 +64,75 @@ jobs:
           exit 1
         fi
         echo "✅ Found ./dist directory with $(find ./dist -type f | wc -l) files"
+        
+    - name: Setup Rust and Cargo
+      run: |
+        echo "🦀 Installing Rust and Cargo..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source $HOME/.cargo/env
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        export PATH="$HOME/.cargo/bin:$PATH"
+        rustc --version
+        cargo --version
+        echo "✅ Rust and Cargo installed successfully"
+        
+    - name: Install Sui CLI
+      run: |
+        # Install Sui CLI using Cargo (official method)
+        echo "🔧 Installing Sui CLI via Cargo..."
+        source $HOME/.cargo/env
+        export PATH="$HOME/.cargo/bin:$PATH"
+        
+        # Install Sui CLI from the official repository
+        cargo install --locked --git https://github.com/MystenLabs/sui.git --branch testnet sui
+        
+        # Verify installation
+        SUI_BIN="$HOME/.cargo/bin/sui"
+        if [ -f "$SUI_BIN" ]; then
+          echo "✅ Sui CLI installed successfully at: $SUI_BIN"
+          $SUI_BIN --version
+          # Store the binary path for later steps
+          echo "SUI_BINARY_PATH=$SUI_BIN" >> $GITHUB_ENV
+        else
+          echo "❌ Sui CLI installation failed"
+          echo "Checking cargo installation directory..."
+          ls -la "$HOME/.cargo/bin/" 2>/dev/null || echo "Cargo bin directory not found"
+          echo "PATH: $PATH"
+          exit 1
+        fi
+        
+    - name: Install Walrus CLI
+      run: |
+        # Install Walrus CLI for the specified network
+        if [ "$NETWORK" = "mainnet" ]; then
+          curl -sSf https://install.wal.app | sh
+        else
+          curl -sSf https://install.wal.app | sh -s -- -n testnet
+        fi
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        
+    - name: Download Walrus site-builder
+      run: |
+        # Determine system architecture
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+          SYSTEM="ubuntu-x64"
+        elif [ "$ARCH" = "aarch64" ]; then
+          SYSTEM="ubuntu-arm64"
+        else
+          echo "❌ Unsupported architecture: $ARCH"
+          exit 1
+        fi
+        
+        # Download appropriate site-builder binary
+        if [ "$NETWORK" = "mainnet" ]; then
+          curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-$SYSTEM" -o site-builder
+        else
+          curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-$SYSTEM" -o site-builder
+        fi
+        
+        chmod +x site-builder
+        echo "✅ Downloaded site-builder for $SYSTEM ($NETWORK)"
         
     - name: Setup Walrus configuration
       run: |
@@ -95,14 +163,26 @@ jobs:
         if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
           echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
           echo "Please ensure your private key is base64 encoded:"
-          echo "  1. Get your private key: sui keytool export --key-identity <address> --json"
+          echo "  1. Get your private key: $HOME/.cargo/bin/sui keytool export --key-identity <address> --json"
           echo "  2. Or encode it: echo 'your_private_key' | base64"
           echo "  3. Update the SUI_PRIVATE_KEY secret with the base64 result"
           exit 1
         fi
         
+        # Use the Sui binary path from the installation step
+        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.cargo/bin/sui}"
+        
+        # Verify the binary is still available
+        if ! command -v "$SUI_BIN" >/dev/null 2>&1 && [ ! -f "$SUI_BIN" ]; then
+          echo "❌ Error: Sui CLI not found at $SUI_BIN"
+          echo "Available files in $HOME/.cargo/bin:"
+          ls -la "$HOME/.cargo/bin/" 2>/dev/null || echo "Directory not found"
+          echo "PATH: $PATH"
+          exit 1
+        fi
+        
         # Initialize Sui client to create initial config
-        sui client --help > /dev/null 2>&1 || true
+        $SUI_BIN client --help > /dev/null 2>&1 || true
         
         # Create Sui client config
         cat > ~/.sui/sui_config/client.yaml << EOF
@@ -120,8 +200,8 @@ jobs:
         PRIVATE_KEY_DECODED=$(echo "$SUI_PRIVATE_KEY" | base64 -d)
         echo "$PRIVATE_KEY_DECODED" > ~/.sui/sui_config/sui.keystore
         
-        # Verify wallet setup
-        sui client active-address
+        # Verify wallet setup using full path
+        $SUI_BIN client active-address
         echo "✅ Sui wallet configured for $NETWORK"
         
     - name: Check and fund wallet (testnet only)
@@ -129,8 +209,11 @@ jobs:
       env:
         SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
       run: |
+        # Use the Sui binary path from the installation step
+        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.cargo/bin/sui}"
+        
         # Check current balance
-        BALANCE=$(sui client gas --json | jq -r '.[0].balance // 0')
+        BALANCE=$($SUI_BIN client gas --json | jq -r '.[0].balance // 0')
         echo "Current balance: $BALANCE MIST"
         
         # If balance is low (less than 1 SUI = 1000000000 MIST), request from faucet
@@ -143,7 +226,7 @@ jobs:
           # Wait for faucet transaction to process
           sleep 10
           
-          NEW_BALANCE=$(sui client gas --json | jq -r '.[0].balance // 0')
+          NEW_BALANCE=$($SUI_BIN client gas --json | jq -r '.[0].balance // 0')
           echo "New balance: $NEW_BALANCE MIST"
         else
           echo "✅ Sufficient balance available"
