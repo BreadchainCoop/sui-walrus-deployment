@@ -87,7 +87,7 @@ jobs:
         # Run Docker container with proper Sui wallet setup
         echo "🚀 Running deployment container with Sui wallet setup..."
         docker run --rm \
-          -v "$(pwd)/dist:/dist" \
+          -v "$(pwd)/dist:/workspace/dist" \
           -v "$(pwd)/config/walrus-client.yaml:/root/.config/walrus/client_config.yaml" \
           -v "$(pwd)/config/walrus-site.yaml:/root/.config/walrus/site-config.yaml" \
           -e SUI_MNEMONIC="$SUI_MNEMONIC" \
@@ -97,7 +97,7 @@ jobs:
           $DOCKER_IMAGE \
           /bin/bash -c "
             echo '🔧 Setting up Sui wallet inside container...'
-            
+            pwd
             # Import mnemonic into Sui keystore
             echo '🔑 Importing mnemonic into Sui keystore...'
             # Clean the mnemonic by removing surrounding single quotes
