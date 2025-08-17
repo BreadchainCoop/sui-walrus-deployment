@@ -116,23 +116,24 @@ jobs:
           -e NETWORK="$NETWORK" \
           -e EPOCHS="$EPOCHS" \
           $DOCKER_IMAGE \
-          /bin/bash -c "
-            set -e
-            echo 'Starting deployment...'
-            echo 'Checking mounted files:'
-            ls -la /dist/ || echo 'No /dist directory'
-            ls -la /root/.config/walrus/ || echo 'No walrus config directory'
-            echo 'Environment variables:'
-            echo 'NETWORK='\$NETWORK
-            echo 'EPOCHS='\$EPOCHS
-            echo 'SUI_ADDRESS='\$SUI_ADDRESS
-            echo 'Checking if site-builder is executable:'
-            /usr/local/bin/site-builder --help | head -5 || echo 'site-builder help failed'
-            echo 'Attempting to run site-builder...'
-            echo 'Command: /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context '\$NETWORK' deploy /dist --epochs '\$EPOCHS
-            /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context \$NETWORK deploy /dist --epochs \$EPOCHS
-            echo 'Site-builder command completed with exit code: '\$?
-          " 2>&1)
+          /bin/bash -c '
+            echo "Starting deployment..."
+            echo "Checking mounted files:"
+            ls -la /dist/ || echo "No /dist directory"
+            ls -la /root/.config/walrus/ || echo "No walrus config directory"
+            echo "Environment variables:"
+            echo "NETWORK=$NETWORK"
+            echo "EPOCHS=$EPOCHS"
+            echo "SUI_ADDRESS=$SUI_ADDRESS"
+            echo "Checking if site-builder is executable:"
+            /usr/local/bin/site-builder --help | head -5 || echo "site-builder help failed"
+            echo "Attempting to run site-builder..."
+            echo "Command: /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context $NETWORK deploy /dist --epochs $EPOCHS"
+            /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context $NETWORK deploy /dist --epochs $EPOCHS
+            SITE_BUILDER_EXIT_CODE=$?
+            echo "Site-builder command completed with exit code: $SITE_BUILDER_EXIT_CODE"
+            exit $SITE_BUILDER_EXIT_CODE
+          ' 2>&1)
         
         echo "$DEPLOY_OUTPUT"
         
