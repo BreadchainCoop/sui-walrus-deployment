@@ -29,15 +29,26 @@ ENV PATH="/root/.cargo/bin:$PATH"
 # Verify Rust installation
 RUN rustc --version && cargo --version
 
-FROM base AS sui-builder
-
-# Install Sui CLI (this takes the longest, so we do it in a separate stage)
-RUN cargo install --locked --git https://github.com/MystenLabs/sui.git --branch testnet sui
-
 FROM base AS final
 
-# Copy Sui binary from builder stage
-COPY --from=sui-builder /root/.cargo/bin/sui /usr/local/bin/sui
+# Download pre-built Sui CLI binary instead of compiling from source
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        PLATFORM="ubuntu-x64"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        PLATFORM="ubuntu-arm64"; \
+    else \
+        echo "Unsupported architecture: $ARCH"; \
+        exit 1; \
+    fi && \
+    echo "Downloading Sui CLI for $PLATFORM..." && \
+    curl -L "https://github.com/MystenLabs/sui/releases/latest/download/sui-$PLATFORM.tgz" -o sui.tgz && \
+    tar -xzf sui.tgz && \
+    chmod +x sui && \
+    mv sui /usr/local/bin/sui && \
+    rm sui.tgz && \
+    sui --version && \
+    echo "✅ Sui CLI installed successfully"
 
 # Install Walrus CLI for both networks
 RUN curl -sSf https://install.wal.app | sh -s -- -n testnet && \
