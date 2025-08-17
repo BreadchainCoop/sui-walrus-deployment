@@ -1,0 +1,255 @@
+name: Deploy to Walrus
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      network:
+        description: 'Network to deploy to'
+        required: true
+        default: 'testnet'
+        type: choice
+        options:
+        - testnet
+        - mainnet
+      epochs:
+        description: 'Storage duration in epochs (testnet: 1 epoch = 2 days, mainnet: 1 epoch = 14 days)'
+        required: true
+        default: '5'
+        type: string
+      force_rebuild:
+        description: 'Force rebuild even if no changes detected'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NETWORK: ${{ github.event.inputs.network || 'testnet' }}
+  EPOCHS: ${{ github.event.inputs.epochs || '2' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      site_url: ${{ steps.deploy.outputs.site_url }}
+      deployment_id: ${{ steps.deploy.outputs.deployment_id }}
+      epochs_used: ${{ steps.deploy.outputs.epochs_used }}
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js (if package.json exists)
+      if: hashFiles('package.json') != ''
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies and build (if needed)
+      if: hashFiles('package.json') != ''
+      run: |
+        npm ci
+        npm run build
+    
+    - name: Verify dist directory exists
+      run: |
+        if [ ! -d "./dist" ]; then
+          echo "❌ Error: ./dist directory not found!"
+          echo "Please ensure your build process creates a ./dist directory with static files."
+          exit 1
+        fi
+        echo "✅ Found ./dist directory with $(find ./dist -type f | wc -l) files"
+        
+    - name: Install Sui CLI
+      run: |
+        # Install Sui CLI
+        curl -fsSL https://raw.githubusercontent.com/MystenLabs/sui/main/scripts/install.sh | bash
+        echo "$HOME/.sui/bin" >> $GITHUB_PATH
+        
+    - name: Install Walrus CLI
+      run: |
+        # Install Walrus CLI for the specified network
+        if [ "$NETWORK" = "mainnet" ]; then
+          curl -sSf https://install.wal.app | sh
+        else
+          curl -sSf https://install.wal.app | sh -s -- -n testnet
+        fi
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+        
+    - name: Download Walrus site-builder
+      run: |
+        # Determine system architecture
+        ARCH=$(uname -m)
+        if [ "$ARCH" = "x86_64" ]; then
+          SYSTEM="ubuntu-x64"
+        elif [ "$ARCH" = "aarch64" ]; then
+          SYSTEM="ubuntu-arm64"
+        else
+          echo "❌ Unsupported architecture: $ARCH"
+          exit 1
+        fi
+        
+        # Download appropriate site-builder binary
+        if [ "$NETWORK" = "mainnet" ]; then
+          curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-$SYSTEM" -o site-builder
+        else
+          curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-$SYSTEM" -o site-builder
+        fi
+        
+        chmod +x site-builder
+        echo "✅ Downloaded site-builder for $SYSTEM ($NETWORK)"
+        
+    - name: Setup Walrus configuration
+      run: |
+        # Create config directories
+        mkdir -p ~/.config/walrus
+        mkdir -p ~/.sui/sui_config
+        
+        # Copy repository configs to expected locations
+        cp config/walrus-client.yaml ~/.config/walrus/client_config.yaml
+        cp config/walrus-site.yaml ~/.config/walrus/site-config.yaml
+        
+        echo "✅ Walrus configuration files installed"
+        
+    - name: Setup Sui wallet
+      env:
+        SUI_PRIVATE_KEY: ${{ secrets.SUI_PRIVATE_KEY }}
+        SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
+      run: |
+        if [ -z "$SUI_PRIVATE_KEY" ] || [ -z "$SUI_ADDRESS" ]; then
+          echo "❌ Error: SUI_PRIVATE_KEY and SUI_ADDRESS secrets must be set in repository settings"
+          echo "Please add these secrets to your GitHub repository:"
+          echo "  - SUI_PRIVATE_KEY: Your Sui wallet private key (base64 encoded)"
+          echo "  - SUI_ADDRESS: Your Sui wallet address"
+          exit 1
+        fi
+        
+        # Create Sui client config
+        cat > ~/.sui/sui_config/client.yaml << EOF
+        keystore:
+          File: ~/.sui/sui_config/sui.keystore
+        envs:
+          - alias: $NETWORK
+            rpc: "https://fullnode.$NETWORK.sui.io:443"
+            ws: ~
+        active_env: $NETWORK
+        active_address: "$SUI_ADDRESS"
+        EOF
+        
+        # Import private key
+        echo "$SUI_PRIVATE_KEY" | base64 -d > ~/.sui/sui_config/sui.keystore
+        
+        # Verify wallet setup
+        sui client active-address
+        echo "✅ Sui wallet configured for $NETWORK"
+        
+    - name: Check and fund wallet (testnet only)
+      if: env.NETWORK == 'testnet'
+      env:
+        SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
+      run: |
+        # Check current balance
+        BALANCE=$(sui client gas --json | jq -r '.[0].balance // 0')
+        echo "Current balance: $BALANCE MIST"
+        
+        # If balance is low (less than 1 SUI = 1000000000 MIST), request from faucet
+        if [ "$BALANCE" -lt "1000000000" ]; then
+          echo "💰 Balance low, requesting from testnet faucet..."
+          curl -X POST "https://faucet.testnet.sui.io/gas" \
+            -H "Content-Type: application/json" \
+            -d "{\"FixedAmountRequest\":{\"recipient\":\"$SUI_ADDRESS\"}}"
+          
+          # Wait for faucet transaction to process
+          sleep 10
+          
+          NEW_BALANCE=$(sui client gas --json | jq -r '.[0].balance // 0')
+          echo "New balance: $NEW_BALANCE MIST"
+        else
+          echo "✅ Sufficient balance available"
+        fi
+        
+    - name: Get WAL tokens
+      run: |
+        echo "🪙 Getting WAL tokens..."
+        walrus get-wal
+        echo "✅ WAL tokens acquired"
+        
+    - name: Deploy to Walrus
+      id: deploy
+      run: |
+        echo "🚀 Deploying to Walrus ($NETWORK) for $EPOCHS epochs..."
+        
+        # Run deployment and capture output
+        DEPLOY_OUTPUT=$(./site-builder --config ~/.config/walrus/site-config.yaml \
+                                      --context "$NETWORK" \
+                                      deploy ./dist \
+                                      --epochs "$EPOCHS" 2>&1)
+        
+        echo "$DEPLOY_OUTPUT"
+        
+        # Extract site URL from output (look for the localhost URL pattern)
+        SITE_ID=$(echo "$DEPLOY_OUTPUT" | grep -o 'http://[a-z0-9]*\.localhost:3000' | sed 's/http:\/\///' | sed 's/\.localhost:3000//')
+        
+        if [ -n "$SITE_ID" ]; then
+          if [ "$NETWORK" = "mainnet" ]; then
+            SITE_URL="https://${SITE_ID}.walrus.site"
+          else
+            SITE_URL="https://${SITE_ID}.buildonwalrus.dev"
+          fi
+          
+          echo "✅ Deployment successful!"
+          echo "🌐 Site URL: $SITE_URL"
+          echo "⏰ Storage duration: $EPOCHS epochs"
+          
+          # Set outputs
+          echo "site_url=$SITE_URL" >> $GITHUB_OUTPUT
+          echo "deployment_id=$SITE_ID" >> $GITHUB_OUTPUT
+          echo "epochs_used=$EPOCHS" >> $GITHUB_OUTPUT
+          
+          # Create deployment summary
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ## 🎉 Walrus Deployment Successful
+          
+          **Network:** $NETWORK  
+          **Site URL:** [$SITE_URL]($SITE_URL)  
+          **Deployment ID:** \`$SITE_ID\`  
+          **Storage Duration:** $EPOCHS epochs  
+          **Expires:** $(date -d "+$(($EPOCHS * $([ "$NETWORK" = "mainnet" ] && echo 14 || echo 2))) days" '+%Y-%m-%d')
+          
+          Your site is now live on the Walrus decentralized storage network! 🎊
+          EOF
+        else
+          echo "❌ Failed to extract site URL from deployment output"
+          echo "Full output:"
+          echo "$DEPLOY_OUTPUT"
+          exit 1
+        fi
+        
+    - name: Comment on PR (if applicable)
+      if: github.event_name == 'pull_request' && steps.deploy.outputs.site_url
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const siteUrl = '${{ steps.deploy.outputs.site_url }}';
+          const network = '${{ env.NETWORK }}';
+          const epochs = '${{ env.EPOCHS }}';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: `## 🌐 Walrus Preview Deployment
+            
+            Your site has been deployed to Walrus **${network}**!
+            
+            **🔗 Preview URL:** ${siteUrl}
+            **⏰ Storage Duration:** ${epochs} epochs
+            **🌐 Network:** ${network}
+            
+            This deployment will be available for ${epochs} epochs (${network === 'mainnet' ? epochs * 14 : epochs * 2} days).`
+          });
