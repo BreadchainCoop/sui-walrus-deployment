@@ -104,8 +104,7 @@ jobs:
             CLEAN_MNEMONIC=$(echo "$SUI_MNEMONIC" | sed "s/^'//; s/'$//")
             sui keytool import "$CLEAN_MNEMONIC" ed25519
             (echo "y"; echo ""; echo "0") | sui client envs
-            site-builder --config /root/.config/walrus/site-config.yaml  --context testnet deploy ./dist --epochs 2         
-        
+            site-builder --config /root/.config/walrus/site-config.yaml  --context testnet deploy ./dist --epochs 2
         echo "✅ Deployment command completed"
         
     - name: Cleanup
