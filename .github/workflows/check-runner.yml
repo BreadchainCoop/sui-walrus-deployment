@@ -1,11 +1,7 @@
 name: Check GitHub Runner
 
 on:
-  workflow_dispatch:  # Manual trigger
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   check-runner:

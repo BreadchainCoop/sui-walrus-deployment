@@ -1,15 +1,7 @@
 name: Build Walrus Docker Image
 
 on:
-  push:
-    branches: [ main ]
-    paths:
-      - 'Dockerfile'
-      - '.github/workflows/build-docker-image.yml'
   workflow_dispatch:
-  schedule:
-    # Rebuild weekly to get latest Sui/Walrus versions
-    - cron: '0 2 * * 1'  # Every Monday at 2 AM
 
 env:
   REGISTRY: ghcr.io
