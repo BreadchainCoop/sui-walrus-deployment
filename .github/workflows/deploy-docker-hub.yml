@@ -81,9 +81,11 @@ jobs:
         if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
           echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
           echo "Please ensure your private key is base64 encoded:"
-          echo "  1. Get your private key: sui keytool export --key-identity <address> --json"
-          echo "  2. Or encode it: echo 'your_private_key' | base64"
-          echo "  3. Update the SUI_PRIVATE_KEY secret with the base64 result"
+          echo "  1. Export your private key: sui keytool export --key-identity <address> --json"
+          echo "     This will give you a hex string (without 0x prefix)"
+          echo "  2. Convert hex to base64: echo 'your_hex_private_key' | xxd -r -p | base64"
+          echo "  3. Or if you have raw bytes: echo 'your_private_key_bytes' | base64"
+          echo "  4. Update the SUI_PRIVATE_KEY secret with the base64 result"
           exit 1
         fi
         
@@ -111,29 +113,38 @@ jobs:
           /bin/bash -c "
             echo '🔧 Setting up Sui wallet inside container...'
             
-            # Create Sui directories
-            mkdir -p ~/.sui/sui_config
-            
             # Validate base64 encoding of private key
             if ! echo \"\$SUI_PRIVATE_KEY\" | base64 -d > /dev/null 2>&1; then
               echo '❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded'
               exit 1
             fi
             
-            # Create Sui client config
-            echo 'keystore:' > ~/.sui/sui_config/client.yaml
-            echo '  File: ~/.sui/sui_config/sui.keystore' >> ~/.sui/sui_config/client.yaml
-            echo 'envs:' >> ~/.sui/sui_config/client.yaml
-            echo '  - alias: '\$NETWORK >> ~/.sui/sui_config/client.yaml
-            echo '    rpc: \"https://fullnode.'\$NETWORK'.sui.io:443\"' >> ~/.sui/sui_config/client.yaml
-            echo '    ws: ~' >> ~/.sui/sui_config/client.yaml
-            echo 'active_env: '\$NETWORK >> ~/.sui/sui_config/client.yaml
-            echo 'active_address: \"'\$SUI_ADDRESS'\"' >> ~/.sui/sui_config/client.yaml
+            # Decode the private key to a temporary file
+            echo \"\$SUI_PRIVATE_KEY\" | base64 -d > /tmp/private_key.txt
             
-            # Import private key - create keystore from the decoded private key
-            echo \"\$SUI_PRIVATE_KEY\" | base64 -d > ~/.sui/sui_config/sui.keystore
+            # Initialize Sui client configuration for the network
+            echo '🔧 Initializing Sui client for '\$NETWORK' network...'
+            sui client new-env --alias \$NETWORK --rpc https://fullnode.\$NETWORK.sui.io:443
+            sui client switch --env \$NETWORK
             
-            echo '✅ Sui wallet configured'
+            # Import the private key using sui keytool
+            echo '🔑 Importing private key into Sui keystore...'
+            IMPORTED_ADDRESS=\$(sui keytool import /tmp/private_key.txt ed25519 | grep -o '0x[a-fA-F0-9]*' | head -1)
+            
+            # Clean up temporary file
+            rm -f /tmp/private_key.txt
+            
+            # Verify the imported address matches the expected address
+            if [ \"\$IMPORTED_ADDRESS\" != \"\$SUI_ADDRESS\" ]; then
+              echo '⚠️  Warning: Imported address (\$IMPORTED_ADDRESS) differs from expected address (\$SUI_ADDRESS)'
+              echo 'Using imported address for deployment...'
+              SUI_ADDRESS=\$IMPORTED_ADDRESS
+            fi
+            
+            # Set the imported address as active
+            sui client switch --address \$SUI_ADDRESS
+            
+            echo '✅ Sui wallet configured with address: '\$SUI_ADDRESS
             
             # Check wallet setup
             echo '💰 Checking Sui wallet setup...'
