@@ -72,20 +72,22 @@ jobs:
         if [ -z "$SUI_PRIVATE_KEY" ] || [ -z "$SUI_ADDRESS" ]; then
           echo "❌ Error: SUI_PRIVATE_KEY and SUI_ADDRESS secrets must be set in repository settings"
           echo "Please add these secrets to your GitHub repository:"
-          echo "  - SUI_PRIVATE_KEY: Your Sui wallet private key"
+          echo "  - SUI_PRIVATE_KEY: Your Sui wallet private key (base64 encoded)"
           echo "  - SUI_ADDRESS: Your Sui wallet address"
           exit 1
         fi
         
-        # Create .env file for Docker container
-        cat > .env << EOF
-        SUI_PRIVATE_KEY=$SUI_PRIVATE_KEY
-        SUI_ADDRESS=$SUI_ADDRESS
-        NETWORK=$NETWORK
-        EPOCHS=$EPOCHS
-        EOF
+        # Validate base64 encoding of private key
+        if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
+          echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
+          echo "Please ensure your private key is base64 encoded:"
+          echo "  1. Get your private key: sui keytool export --key-identity <address> --json"
+          echo "  2. Or encode it: echo 'your_private_key' | base64"
+          echo "  3. Update the SUI_PRIVATE_KEY secret with the base64 result"
+          exit 1
+        fi
         
-        echo "✅ Environment file prepared"
+        echo "✅ Environment validation completed"
         
     - name: Deploy to Walrus using Docker
       id: deploy
@@ -95,19 +97,8 @@ jobs:
       run: |
         echo "🚀 Starting Walrus deployment using Docker container..."
         
-        # Debug: Check what's in the container first
-        echo "🔍 Debugging Docker container contents..."
-        docker run --rm $DOCKER_IMAGE /bin/bash -c "
-          echo 'Container contents:'
-          ls -la /
-          echo 'Checking for site-builder binary:'
-          which site-builder || echo 'site-builder not found in PATH'
-          ls -la /usr/local/bin/ | grep site || echo 'No site-builder in /usr/local/bin/'
-          echo 'PATH is: $PATH'
-        "
-        
-        # Run Docker container with proper configuration
-        echo "🚀 Running deployment container..."
+        # Run Docker container with proper Sui wallet setup
+        echo "🚀 Running deployment container with Sui wallet setup..."
         docker run --rm \
           -v "$(pwd)/dist:/dist" \
           -v "$(pwd)/config/walrus-client.yaml:/root/.config/walrus/client_config.yaml" \
@@ -117,15 +108,59 @@ jobs:
           -e NETWORK="$NETWORK" \
           -e EPOCHS="$EPOCHS" \
           $DOCKER_IMAGE \
-          /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context testnet deploy /dist --epochs 1
+          /bin/bash -c "
+            echo '🔧 Setting up Sui wallet inside container...'
+            
+            # Create Sui directories
+            mkdir -p ~/.sui/sui_config
+            
+            # Validate base64 encoding of private key
+            if ! echo \"\$SUI_PRIVATE_KEY\" | base64 -d > /dev/null 2>&1; then
+              echo '❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded'
+              exit 1
+            fi
+            
+            # Create Sui client config
+            cat > ~/.sui/sui_config/client.yaml << EOF
+keystore:
+  File: ~/.sui/sui_config/sui.keystore
+envs:
+  - alias: \$NETWORK
+    rpc: \"https://fullnode.\$NETWORK.sui.io:443\"
+    ws: ~
+active_env: \$NETWORK
+active_address: \"\$SUI_ADDRESS\"
+EOF
+            
+            # Import private key - create keystore from the decoded private key
+            echo \"\$SUI_PRIVATE_KEY\" | base64 -d > ~/.sui/sui_config/sui.keystore
+            
+            echo '✅ Sui wallet configured'
+            
+            # Check wallet setup
+            echo '💰 Checking Sui wallet setup...'
+            sui client active-address || echo 'Warning: Could not verify active address'
+            
+            # Check wallet balance
+            echo '💰 Checking wallet balance...'
+            BALANCE=\$(sui client gas --json 2>/dev/null | jq -r '.[0].balance // 0' 2>/dev/null || echo '0')
+            echo \"Current SUI balance: \$BALANCE MIST\"
+            
+            if [ \"\$BALANCE\" = '0' ]; then
+              echo '⚠️  Warning: No SUI balance detected. Deployment may fail if gas is needed.'
+            else
+              echo '✅ SUI balance available for gas fees'
+            fi
+            
+            echo '🚀 Starting Walrus deployment...'
+            /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context \$NETWORK deploy /dist --epochs \$EPOCHS
+          "
         
         echo "✅ Deployment command completed"
         
     - name: Cleanup
       if: always()
       run: |
-        # Remove .env file for security
-        rm -f .env
         echo "✅ Cleanup completed"
         
     - name: Comment on PR (if applicable)
