@@ -1,0 +1,72 @@
+name: Check GitHub Runner
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-runner:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Display Runner Information
+      run: |
+        echo "=== GitHub Runner Information ==="
+        echo "Runner OS: $RUNNER_OS"
+        echo "Runner Architecture: $RUNNER_ARCH"
+        echo "Runner Name: $RUNNER_NAME"
+        echo "Runner Tool Cache: $RUNNER_TOOL_CACHE"
+        echo "Runner Workspace: $RUNNER_WORKSPACE"
+        echo "Runner Temp: $RUNNER_TEMP"
+        echo ""
+        echo "=== System Information ==="
+        echo "Hostname: $(hostname)"
+        echo "Whoami: $(whoami)"
+        echo "PWD: $(pwd)"
+        echo "Home: $HOME"
+        echo ""
+        echo "=== OS Details ==="
+        uname -a
+        echo ""
+        echo "=== CPU Information ==="
+        nproc
+        cat /proc/cpuinfo | grep "model name" | head -1
+        echo ""
+        echo "=== Memory Information ==="
+        free -h
+        echo ""
+        echo "=== Disk Space ==="
+        df -h
+        echo ""
+        echo "=== Environment Variables (GitHub specific) ==="
+        env | grep GITHUB_ | sort
+        echo ""
+        echo "=== Current Date/Time ==="
+        date
+        echo "Timezone: $(timedatectl show --property=Timezone --value 2>/dev/null || echo 'N/A')"
+
+  check-runner-matrix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - name: Display Runner OS Matrix
+      shell: bash
+      run: |
+        echo "=== Matrix Runner: ${{ matrix.os }} ==="
+        echo "Runner OS: $RUNNER_OS"
+        echo "Runner Architecture: $RUNNER_ARCH"
+        echo "System: $(uname -s 2>/dev/null || echo 'Windows')"
+        echo "Architecture: $(uname -m 2>/dev/null || echo 'N/A')"
+        echo "Hostname: $(hostname 2>/dev/null || echo $COMPUTERNAME)"
+        echo "Current user: $(whoami)"
+        echo "Current directory: $(pwd)"
