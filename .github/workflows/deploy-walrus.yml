@@ -129,6 +129,16 @@ jobs:
           exit 1
         fi
         
+        # Validate base64 encoding of private key
+        if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
+          echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
+          echo "Please ensure your private key is base64 encoded:"
+          echo "  1. Get your private key: sui keytool export --key-identity <address> --json"
+          echo "  2. Or encode it: echo 'your_private_key' | base64"
+          echo "  3. Update the SUI_PRIVATE_KEY secret with the base64 result"
+          exit 1
+        fi
+        
         # Create Sui client config
         cat > ~/.sui/sui_config/client.yaml << EOF
         keystore:
