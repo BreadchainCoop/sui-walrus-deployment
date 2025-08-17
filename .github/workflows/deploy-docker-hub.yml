@@ -65,26 +65,12 @@ jobs:
         
     - name: Prepare environment file
       env:
-        SUI_PRIVATE_KEY: ${{ secrets.SUI_PRIVATE_KEY }}
+        SUI_MNEMONIC: ${{ secrets.SUI_MNEMONIC }}
         SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
       run: |
         # Validate required secrets
-        if [ -z "$SUI_PRIVATE_KEY" ] || [ -z "$SUI_ADDRESS" ]; then
-          echo "❌ Error: SUI_PRIVATE_KEY and SUI_ADDRESS secrets must be set in repository settings"
-          echo "Please add these secrets to your GitHub repository:"
-          echo "  - SUI_PRIVATE_KEY: Your Sui wallet private key (base64 encoded)"
-          echo "  - SUI_ADDRESS: Your Sui wallet address"
-          exit 1
-        fi
-        
-        # Validate base64 encoding of private key
-        if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
-          echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
-          echo "Please ensure your private key is base64 encoded:"
-          echo "  1. If you have a 'suiprivkey1...' key: echo 'suiprivkey1...' | base64"
-          echo "  2. If you have hex format: sui keytool convert 'your_hex_key', then base64 encode the result"
-          echo "  3. The final format should be base64-encoded 'suiprivkey1...' string"
-          echo "  4. Update the SUI_PRIVATE_KEY secret with the base64 result"
+        if [ -z "$SUI_MNEMONIC" ] || [ -z "$SUI_ADDRESS" ]; then
+          echo "❌ Error: SUI_MNEMONIC and SUI_ADDRESS secrets must be set in repository settings"
           exit 1
         fi
         
@@ -93,7 +79,7 @@ jobs:
     - name: Deploy to Walrus using Docker
       id: deploy
       env:
-        SUI_PRIVATE_KEY: ${{ secrets.SUI_PRIVATE_KEY }}
+        SUI_MNEMONIC: ${{ secrets.SUI_MNEMONIC }}
         SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
       run: |
         echo "🚀 Starting Walrus deployment using Docker container..."
@@ -104,7 +90,7 @@ jobs:
           -v "$(pwd)/dist:/dist" \
           -v "$(pwd)/config/walrus-client.yaml:/root/.config/walrus/client_config.yaml" \
           -v "$(pwd)/config/walrus-site.yaml:/root/.config/walrus/site-config.yaml" \
-          -e SUI_PRIVATE_KEY="$SUI_PRIVATE_KEY" \
+          -e SUI_MNEMONIC="$SUI_MNEMONIC" \
           -e SUI_ADDRESS="$SUI_ADDRESS" \
           -e NETWORK="$NETWORK" \
           -e EPOCHS="$EPOCHS" \
@@ -112,61 +98,12 @@ jobs:
           /bin/bash -c "
             echo '🔧 Setting up Sui wallet inside container...'
             
-            # Validate base64 encoding of private key
-            if ! echo \"\$SUI_PRIVATE_KEY\" | base64 -d > /dev/null 2>&1; then
-              echo '❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded'
-              exit 1
-            fi
-            
-            # Create Sui client config directory
-            mkdir -p ~/.sui/sui_config
-            
-            # Initialize Sui client configuration non-interactively
-            echo '🔧 Initializing Sui client for '\$NETWORK' network...'
-            echo 'keystore:' > ~/.sui/sui_config/client.yaml
-            echo '  File: ~/.sui/sui_config/sui.keystore' >> ~/.sui/sui_config/client.yaml
-            echo 'envs:' >> ~/.sui/sui_config/client.yaml
-            echo '  - alias: '\$NETWORK >> ~/.sui/sui_config/client.yaml
-            echo '    rpc: \"https://fullnode.'\$NETWORK'.sui.io:443\"' >> ~/.sui/sui_config/client.yaml
-            echo '    ws: ~' >> ~/.sui/sui_config/client.yaml
-            echo 'active_env: '\$NETWORK >> ~/.sui/sui_config/client.yaml
-            echo 'active_address: \"'\$SUI_ADDRESS'\"' >> ~/.sui/sui_config/client.yaml
-            
-            # Decode base64 to get the suiprivkey string (it's already in correct format)
-            echo '🔑 Decoding private key...'
-            SUIPRIVKEY=\$(echo \"\$SUI_PRIVATE_KEY\" | base64 -d | tr -d '\\n')
-            if [ -z \"\$SUIPRIVKEY\" ]; then
-              echo '❌ Failed to decode private key'
-              exit 1
-            fi
-            
-            echo \"Decoded key starts with: \$(echo \"\$SUIPRIVKEY\" | cut -c1-12)...\"
-            
-            # Import the private key using sui keytool (it's already in suiprivkey format)
-            echo '🔑 Importing private key into Sui keystore...'
-            IMPORT_OUTPUT=\$(sui keytool import \"\$SUIPRIVKEY\" ed25519 --json)
+            # Import mnemonic into Sui keystore
+            echo '🔑 Importing mnemonic into Sui keystore...'
+            IMPORT_OUTPUT=\$(sui keytool import \"\$SUI_MNEMONIC\" ed25519 --json)
             IMPORTED_ADDRESS=\$(echo \"\$IMPORT_OUTPUT\" | jq -r '.suiAddress' 2>/dev/null)
             
-            # Verify the imported address matches the expected address
-            if [ \"\$IMPORTED_ADDRESS\" != \"\$SUI_ADDRESS\" ]; then
-              echo '⚠️  Warning: Imported address ('\$IMPORTED_ADDRESS') differs from expected address ('\$SUI_ADDRESS')'
-              echo 'This may indicate the wrong private key was provided.'
-              echo 'Using imported address for deployment...'
-              SUI_ADDRESS=\$IMPORTED_ADDRESS
-              
-              # Update the client config with the correct address
-              sed -i \"s/active_address: .*/active_address: \\\"\$SUI_ADDRESS\\\"/\" ~/.sui/sui_config/client.yaml
-            fi
-            
-            # Verify the address is now managed
-            if ! sui client addresses | grep -q \"\$SUI_ADDRESS\"; then
-              echo '❌ Address '\$SUI_ADDRESS' is not found in managed addresses after import'
-              echo 'Managed addresses:'
-              sui client addresses
-              exit 1
-            fi
-            
-            echo '✅ Sui wallet configured with address: '\$SUI_ADDRESS
+            echo \"✅ Imported address: \$IMPORTED_ADDRESS\"
             
             # Check wallet setup
             echo '💰 Checking Sui wallet setup...'
