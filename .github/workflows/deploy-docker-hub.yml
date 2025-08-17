@@ -119,30 +119,51 @@ jobs:
               exit 1
             fi
             
-            # Decode the private key to a temporary file
-            echo \"\$SUI_PRIVATE_KEY\" | base64 -d > /tmp/private_key.txt
+            # Create Sui client config directory
+            mkdir -p ~/.sui/sui_config
             
-            # Initialize Sui client configuration for the network
+            # Initialize Sui client configuration non-interactively
             echo '🔧 Initializing Sui client for '\$NETWORK' network...'
-            sui client new-env --alias \$NETWORK --rpc https://fullnode.\$NETWORK.sui.io:443
-            sui client switch --env \$NETWORK
+            echo 'keystore:' > ~/.sui/sui_config/client.yaml
+            echo '  File: ~/.sui/sui_config/sui.keystore' >> ~/.sui/sui_config/client.yaml
+            echo 'envs:' >> ~/.sui/sui_config/client.yaml
+            echo '  - alias: '\$NETWORK >> ~/.sui/sui_config/client.yaml
+            echo '    rpc: \"https://fullnode.'\$NETWORK'.sui.io:443\"' >> ~/.sui/sui_config/client.yaml
+            echo '    ws: ~' >> ~/.sui/sui_config/client.yaml
+            echo 'active_env: '\$NETWORK >> ~/.sui/sui_config/client.yaml
+            echo 'active_address: \"'\$SUI_ADDRESS'\"' >> ~/.sui/sui_config/client.yaml
             
-            # Import the private key using sui keytool
+            # Convert base64 private key to suiprivkey format
+            echo '🔑 Converting private key to Sui format...'
+            SUIPRIVKEY=\$(echo \"\$SUI_PRIVATE_KEY\" | sui keytool convert)
+            if [ -z \"\$SUIPRIVKEY\" ]; then
+              echo '❌ Failed to convert private key to Sui format'
+              exit 1
+            fi
+            
+            # Import the converted private key using sui keytool
             echo '🔑 Importing private key into Sui keystore...'
-            IMPORTED_ADDRESS=\$(sui keytool import /tmp/private_key.txt ed25519 | grep -o '0x[a-fA-F0-9]*' | head -1)
-            
-            # Clean up temporary file
-            rm -f /tmp/private_key.txt
+            IMPORT_OUTPUT=\$(sui keytool import \"\$SUIPRIVKEY\" ed25519 --json)
+            IMPORTED_ADDRESS=\$(echo \"\$IMPORT_OUTPUT\" | jq -r '.suiAddress' 2>/dev/null)
             
             # Verify the imported address matches the expected address
             if [ \"\$IMPORTED_ADDRESS\" != \"\$SUI_ADDRESS\" ]; then
-              echo '⚠️  Warning: Imported address (\$IMPORTED_ADDRESS) differs from expected address (\$SUI_ADDRESS)'
+              echo '⚠️  Warning: Imported address ('\$IMPORTED_ADDRESS') differs from expected address ('\$SUI_ADDRESS')'
+              echo 'This may indicate the wrong private key was provided.'
               echo 'Using imported address for deployment...'
               SUI_ADDRESS=\$IMPORTED_ADDRESS
+              
+              # Update the client config with the correct address
+              sed -i \"s/active_address: .*/active_address: \\\"\$SUI_ADDRESS\\\"/\" ~/.sui/sui_config/client.yaml
             fi
             
-            # Set the imported address as active
-            sui client switch --address \$SUI_ADDRESS
+            # Verify the address is now managed
+            if ! sui client addresses | grep -q \"\$SUI_ADDRESS\"; then
+              echo '❌ Address '\$SUI_ADDRESS' is not found in managed addresses after import'
+              echo 'Managed addresses:'
+              sui client addresses
+              exit 1
+            fi
             
             echo '✅ Sui wallet configured with address: '\$SUI_ADDRESS
             
