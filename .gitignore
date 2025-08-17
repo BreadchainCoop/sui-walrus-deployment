@@ -17,7 +17,6 @@ out/
 .env.production.local
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -42,3 +41,7 @@ logs/
 *.temp
 
 site-builder
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore
