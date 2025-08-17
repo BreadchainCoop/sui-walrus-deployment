@@ -133,29 +133,27 @@ jobs:
         if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
           echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
           echo "Please ensure your private key is base64 encoded:"
-          echo "  1. Get your private key: sui keytool export --key-identity <address> --json"
+          echo "  1. Get your private key: $HOME/.sui/bin/sui keytool export --key-identity <address> --json"
           echo "  2. Or encode it: echo 'your_private_key' | base64"
           echo "  3. Update the SUI_PRIVATE_KEY secret with the base64 result"
           exit 1
         fi
         
-        # Create Sui client config
-        cat > ~/.sui/sui_config/client.yaml << EOF
-        keystore:
-          File: ~/.sui/sui_config/sui.keystore
-        envs:
-          - alias: $NETWORK
-            rpc: "https://fullnode.$NETWORK.sui.io:443"
-            ws: ~
-        active_env: $NETWORK
-        active_address: "$SUI_ADDRESS"
-        EOF
+        # Initialize Sui client to create initial config
+        $HOME/.sui/bin/sui client --help > /dev/null 2>&1 || true
         
-        # Import private key
-        echo "$SUI_PRIVATE_KEY" | base64 -d > ~/.sui/sui_config/sui.keystore
+        # Import the private key directly using Sui CLI
+        PRIVATE_KEY_DECODED=$(echo "$SUI_PRIVATE_KEY" | base64 -d)
+        echo "$PRIVATE_KEY_DECODED" | $HOME/.sui/bin/sui keytool import
         
-        # Verify wallet setup
-        sui client active-address
+        # Switch to the correct environment
+        $HOME/.sui/bin/sui client switch --env "https://fullnode.$NETWORK.sui.io:443"
+        
+        # Set the active address
+        $HOME/.sui/bin/sui client switch --address "$SUI_ADDRESS"
+        
+        # Verify wallet setup using full path
+        $HOME/.sui/bin/sui client active-address
         echo "✅ Sui wallet configured for $NETWORK"
         
     - name: Check and fund wallet (testnet only)
@@ -186,7 +184,7 @@ jobs:
     - name: Get WAL tokens
       run: |
         echo "🪙 Getting WAL tokens..."
-        walrus get-wal
+        $HOME/.local/bin/walrus get-wal
         echo "✅ WAL tokens acquired"
         
     - name: Deploy to Walrus
