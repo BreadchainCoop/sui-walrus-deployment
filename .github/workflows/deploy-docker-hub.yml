@@ -135,7 +135,7 @@ jobs:
             
             # Convert base64 private key to suiprivkey format
             echo '🔑 Converting private key to Sui format...'
-            SUIPRIVKEY=\$(echo \"\$SUI_PRIVATE_KEY\" | sui keytool convert)
+            SUIPRIVKEY=\$(sui keytool convert \"\$SUI_PRIVATE_KEY\")
             if [ -z \"\$SUIPRIVKEY\" ]; then
               echo '❌ Failed to convert private key to Sui format'
               exit 1
