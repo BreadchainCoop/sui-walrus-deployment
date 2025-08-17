@@ -121,16 +121,14 @@ jobs:
             fi
             
             # Create Sui client config
-            cat > ~/.sui/sui_config/client.yaml << EOF
-keystore:
-  File: ~/.sui/sui_config/sui.keystore
-envs:
-  - alias: \$NETWORK
-    rpc: \"https://fullnode.\$NETWORK.sui.io:443\"
-    ws: ~
-active_env: \$NETWORK
-active_address: \"\$SUI_ADDRESS\"
-EOF
+            echo 'keystore:' > ~/.sui/sui_config/client.yaml
+            echo '  File: ~/.sui/sui_config/sui.keystore' >> ~/.sui/sui_config/client.yaml
+            echo 'envs:' >> ~/.sui/sui_config/client.yaml
+            echo '  - alias: '\$NETWORK >> ~/.sui/sui_config/client.yaml
+            echo '    rpc: \"https://fullnode.'\$NETWORK'.sui.io:443\"' >> ~/.sui/sui_config/client.yaml
+            echo '    ws: ~' >> ~/.sui/sui_config/client.yaml
+            echo 'active_env: '\$NETWORK >> ~/.sui/sui_config/client.yaml
+            echo 'active_address: \"'\$SUI_ADDRESS'\"' >> ~/.sui/sui_config/client.yaml
             
             # Import private key - create keystore from the decoded private key
             echo \"\$SUI_PRIVATE_KEY\" | base64 -d > ~/.sui/sui_config/sui.keystore
