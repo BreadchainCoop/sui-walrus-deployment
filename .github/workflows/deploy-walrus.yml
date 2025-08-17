@@ -67,9 +67,43 @@ jobs:
         
     - name: Install Sui CLI
       run: |
-        # Install Sui CLI
+        # Install Sui CLI using official installation script
+        echo "🔧 Installing Sui CLI..."
         curl -fsSL https://raw.githubusercontent.com/MystenLabs/sui/main/scripts/install.sh | bash
+        
+        # Reload shell to ensure PATH is updated
+        source ~/.bashrc 2>/dev/null || true
+        source ~/.profile 2>/dev/null || true
+        
+        # Add to GitHub Actions PATH for subsequent steps
         echo "$HOME/.sui/bin" >> $GITHUB_PATH
+        export PATH="$HOME/.sui/bin:$PATH"
+        
+        # Wait for installation to complete
+        sleep 3
+        
+        # Verify installation with multiple fallbacks
+        SUI_BIN=""
+        if [ -f "$HOME/.sui/bin/sui" ]; then
+          SUI_BIN="$HOME/.sui/bin/sui"
+        elif command -v sui >/dev/null 2>&1; then
+          SUI_BIN="sui"
+        else
+          echo "❌ Sui CLI installation failed"
+          echo "Searching for sui binary..."
+          find /usr -name "sui" -type f 2>/dev/null || true
+          find $HOME -name "sui" -type f 2>/dev/null || true
+          echo "PATH: $PATH"
+          echo "Contents of $HOME/.sui/:"
+          ls -la "$HOME/.sui/" 2>/dev/null || echo "Directory not found"
+          exit 1
+        fi
+        
+        echo "✅ Sui CLI installed successfully at: $SUI_BIN"
+        $SUI_BIN --version
+        
+        # Store the binary path for later steps
+        echo "SUI_BINARY_PATH=$SUI_BIN" >> $GITHUB_ENV
         
     - name: Install Walrus CLI
       run: |
@@ -139,21 +173,39 @@ jobs:
           exit 1
         fi
         
+        # Use the Sui binary path from the installation step
+        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.sui/bin/sui}"
+        
+        # Verify the binary is still available
+        if ! command -v "$SUI_BIN" >/dev/null 2>&1 && [ ! -f "$SUI_BIN" ]; then
+          echo "❌ Error: Sui CLI not found at $SUI_BIN"
+          echo "Available files in $HOME/.sui/bin:"
+          ls -la "$HOME/.sui/bin/" 2>/dev/null || echo "Directory not found"
+          echo "PATH: $PATH"
+          exit 1
+        fi
+        
         # Initialize Sui client to create initial config
-        $HOME/.sui/bin/sui client --help > /dev/null 2>&1 || true
+        $SUI_BIN client --help > /dev/null 2>&1 || true
         
-        # Import the private key directly using Sui CLI
+        # Create Sui client config
+        cat > ~/.sui/sui_config/client.yaml << EOF
+        keystore:
+          File: ~/.sui/sui_config/sui.keystore
+        envs:
+          - alias: $NETWORK
+            rpc: "https://fullnode.$NETWORK.sui.io:443"
+            ws: ~
+        active_env: $NETWORK
+        active_address: "$SUI_ADDRESS"
+        EOF
+        
+        # Import private key - create keystore from the decoded private key
         PRIVATE_KEY_DECODED=$(echo "$SUI_PRIVATE_KEY" | base64 -d)
-        echo "$PRIVATE_KEY_DECODED" | $HOME/.sui/bin/sui keytool import
-        
-        # Switch to the correct environment
-        $HOME/.sui/bin/sui client switch --env "https://fullnode.$NETWORK.sui.io:443"
-        
-        # Set the active address
-        $HOME/.sui/bin/sui client switch --address "$SUI_ADDRESS"
+        echo "$PRIVATE_KEY_DECODED" > ~/.sui/sui_config/sui.keystore
         
         # Verify wallet setup using full path
-        $HOME/.sui/bin/sui client active-address
+        $SUI_BIN client active-address
         echo "✅ Sui wallet configured for $NETWORK"
         
     - name: Check and fund wallet (testnet only)
@@ -161,8 +213,11 @@ jobs:
       env:
         SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
       run: |
+        # Use the Sui binary path from the installation step
+        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.sui/bin/sui}"
+        
         # Check current balance
-        BALANCE=$(sui client gas --json | jq -r '.[0].balance // 0')
+        BALANCE=$($SUI_BIN client gas --json | jq -r '.[0].balance // 0')
         echo "Current balance: $BALANCE MIST"
         
         # If balance is low (less than 1 SUI = 1000000000 MIST), request from faucet
@@ -175,7 +230,7 @@ jobs:
           # Wait for faucet transaction to process
           sleep 10
           
-          NEW_BALANCE=$(sui client gas --json | jq -r '.[0].balance // 0')
+          NEW_BALANCE=$($SUI_BIN client gas --json | jq -r '.[0].balance // 0')
           echo "New balance: $NEW_BALANCE MIST"
         else
           echo "✅ Sufficient balance available"
@@ -184,7 +239,7 @@ jobs:
     - name: Get WAL tokens
       run: |
         echo "🪙 Getting WAL tokens..."
-        $HOME/.local/bin/walrus get-wal
+        walrus get-wal
         echo "✅ WAL tokens acquired"
         
     - name: Deploy to Walrus
