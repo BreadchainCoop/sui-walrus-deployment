@@ -104,7 +104,7 @@ jobs:
             CLEAN_MNEMONIC=\$(echo \"\$SUI_MNEMONIC\" | sed \"s/^'//; s/'\$/\"//)
             sui keytool import \"\$CLEAN_MNEMONIC\" ed25519
             (echo \"y\"; echo \"\"; echo \"0\") | sui client envs
-            site-builder --config /root/.config/walrus/site-config.yaml --context \$NETWORK deploy ./dist --epochs \$EPOCHS
+            site-builder --config /root/.config/walrus/site-config.yaml  --context testnet deploy ./dist --epochs 1
           "
         echo "✅ Deployment command completed"
         
