@@ -126,7 +126,7 @@ jobs:
             echo 'EPOCHS=$EPOCHS'
             echo 'SUI_ADDRESS=$SUI_ADDRESS'
             echo 'Attempting to run site-builder...'
-            site-builder --config /root/.config/walrus/site-config.yaml --context $NETWORK deploy /dist --epochs $EPOCHS
+            /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context $NETWORK deploy /dist --epochs $EPOCHS
           " 2>&1)
         
         echo "$DEPLOY_OUTPUT"
