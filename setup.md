@@ -104,6 +104,16 @@ chmod +x site-builder
 
 <!-- - Set static config fielto reachabck to during CICD and deploymet  -->
 ./site-builder --config ~/.config/walrus/site-config.yaml --context testnet deploy ./dist --epochs 1
+<!-- For docker -->
+docker run -it \
+  -v ./dist:/dist \
+  --env-file .env \
+  -v ./config/walrus-client.yaml:/root/.config/walrus/client_config.yaml \
+  -v ./config/walrus-site.yaml:/root/.config/walrus/site-config.yaml \
+  --entrypoint /bin/bash \
+  walrus-deployment
+
+site-builder --config /root/.config/walrus/site-config.yaml  --context testnet deploy ./dist --epochs 1
 
 
 <!-- get site from output, replace localhost:3000 with buildonwalrus.dev -->
