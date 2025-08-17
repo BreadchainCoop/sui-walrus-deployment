@@ -65,45 +65,41 @@ jobs:
         fi
         echo "✅ Found ./dist directory with $(find ./dist -type f | wc -l) files"
         
+    - name: Setup Rust and Cargo
+      run: |
+        echo "🦀 Installing Rust and Cargo..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        source $HOME/.cargo/env
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+        export PATH="$HOME/.cargo/bin:$PATH"
+        rustc --version
+        cargo --version
+        echo "✅ Rust and Cargo installed successfully"
+        
     - name: Install Sui CLI
       run: |
-        # Install Sui CLI using official installation script
-        echo "🔧 Installing Sui CLI..."
-        curl -fsSL https://raw.githubusercontent.com/MystenLabs/sui/main/scripts/install.sh | bash
+        # Install Sui CLI using Cargo (official method)
+        echo "🔧 Installing Sui CLI via Cargo..."
+        source $HOME/.cargo/env
+        export PATH="$HOME/.cargo/bin:$PATH"
         
-        # Reload shell to ensure PATH is updated
-        source ~/.bashrc 2>/dev/null || true
-        source ~/.profile 2>/dev/null || true
+        # Install Sui CLI from the official repository
+        cargo install --locked --git https://github.com/MystenLabs/sui.git --branch testnet sui
         
-        # Add to GitHub Actions PATH for subsequent steps
-        echo "$HOME/.sui/bin" >> $GITHUB_PATH
-        export PATH="$HOME/.sui/bin:$PATH"
-        
-        # Wait for installation to complete
-        sleep 3
-        
-        # Verify installation with multiple fallbacks
-        SUI_BIN=""
-        if [ -f "$HOME/.sui/bin/sui" ]; then
-          SUI_BIN="$HOME/.sui/bin/sui"
-        elif command -v sui >/dev/null 2>&1; then
-          SUI_BIN="sui"
+        # Verify installation
+        SUI_BIN="$HOME/.cargo/bin/sui"
+        if [ -f "$SUI_BIN" ]; then
+          echo "✅ Sui CLI installed successfully at: $SUI_BIN"
+          $SUI_BIN --version
+          # Store the binary path for later steps
+          echo "SUI_BINARY_PATH=$SUI_BIN" >> $GITHUB_ENV
         else
           echo "❌ Sui CLI installation failed"
-          echo "Searching for sui binary..."
-          find /usr -name "sui" -type f 2>/dev/null || true
-          find $HOME -name "sui" -type f 2>/dev/null || true
+          echo "Checking cargo installation directory..."
+          ls -la "$HOME/.cargo/bin/" 2>/dev/null || echo "Cargo bin directory not found"
           echo "PATH: $PATH"
-          echo "Contents of $HOME/.sui/:"
-          ls -la "$HOME/.sui/" 2>/dev/null || echo "Directory not found"
           exit 1
         fi
-        
-        echo "✅ Sui CLI installed successfully at: $SUI_BIN"
-        $SUI_BIN --version
-        
-        # Store the binary path for later steps
-        echo "SUI_BINARY_PATH=$SUI_BIN" >> $GITHUB_ENV
         
     - name: Install Walrus CLI
       run: |
@@ -167,20 +163,20 @@ jobs:
         if ! echo "$SUI_PRIVATE_KEY" | base64 -d > /dev/null 2>&1; then
           echo "❌ Error: SUI_PRIVATE_KEY is not properly base64 encoded"
           echo "Please ensure your private key is base64 encoded:"
-          echo "  1. Get your private key: $HOME/.sui/bin/sui keytool export --key-identity <address> --json"
+          echo "  1. Get your private key: $HOME/.cargo/bin/sui keytool export --key-identity <address> --json"
           echo "  2. Or encode it: echo 'your_private_key' | base64"
           echo "  3. Update the SUI_PRIVATE_KEY secret with the base64 result"
           exit 1
         fi
         
         # Use the Sui binary path from the installation step
-        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.sui/bin/sui}"
+        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.cargo/bin/sui}"
         
         # Verify the binary is still available
         if ! command -v "$SUI_BIN" >/dev/null 2>&1 && [ ! -f "$SUI_BIN" ]; then
           echo "❌ Error: Sui CLI not found at $SUI_BIN"
-          echo "Available files in $HOME/.sui/bin:"
-          ls -la "$HOME/.sui/bin/" 2>/dev/null || echo "Directory not found"
+          echo "Available files in $HOME/.cargo/bin:"
+          ls -la "$HOME/.cargo/bin/" 2>/dev/null || echo "Directory not found"
           echo "PATH: $PATH"
           exit 1
         fi
@@ -214,7 +210,7 @@ jobs:
         SUI_ADDRESS: ${{ secrets.SUI_ADDRESS }}
       run: |
         # Use the Sui binary path from the installation step
-        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.sui/bin/sui}"
+        SUI_BIN="${SUI_BINARY_PATH:-$HOME/.cargo/bin/sui}"
         
         # Check current balance
         BALANCE=$($SUI_BIN client gas --json | jq -r '.[0].balance // 0')
