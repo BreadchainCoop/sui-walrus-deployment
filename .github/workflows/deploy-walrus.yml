@@ -65,39 +65,51 @@ jobs:
         fi
         echo "✅ Found ./dist directory with $(find ./dist -type f | wc -l) files"
         
-    - name: Setup Rust and Cargo
-      run: |
-        echo "🦀 Installing Rust and Cargo..."
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source $HOME/.cargo/env
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-        export PATH="$HOME/.cargo/bin:$PATH"
-        rustc --version
-        cargo --version
-        echo "✅ Rust and Cargo installed successfully"
-        
     - name: Install Sui CLI
       run: |
-        # Install Sui CLI using Cargo (official method)
-        echo "🔧 Installing Sui CLI via Cargo..."
-        source $HOME/.cargo/env
-        export PATH="$HOME/.cargo/bin:$PATH"
+        echo "🔧 Installing Sui CLI..."
         
-        # Install Sui CLI from the official repository
-        cargo install --locked --git https://github.com/MystenLabs/sui.git --branch testnet sui
+        # Download the appropriate Sui binary for Linux x86_64
+        # Get the latest version from GitHub releases
+        LATEST_RELEASE=$(curl -s https://api.github.com/repos/MystenLabs/sui/releases/latest | jq -r '.tag_name')
+        echo "Latest Sui release: $LATEST_RELEASE"
+        
+        # Determine the correct network version based on input
+        # Based on the assets in the screenshot: sui-testnet-v1.54.0-ubuntu-aarch64.tgz format
+        if [ "$NETWORK" = "mainnet" ]; then
+          DOWNLOAD_URL="https://github.com/MystenLabs/sui/releases/download/${LATEST_RELEASE}/sui-mainnet-${LATEST_RELEASE}-ubuntu-x86_64.tgz"
+        else
+          DOWNLOAD_URL="https://github.com/MystenLabs/sui/releases/download/${LATEST_RELEASE}/sui-testnet-${LATEST_RELEASE}-ubuntu-x86_64.tgz"
+        fi
+        
+        echo "Downloading from: $DOWNLOAD_URL"
+        
+        # Create installation directory
+        mkdir -p $HOME/.local/bin
+        
+        # Download and extract Sui CLI with error handling
+        if curl -L "$DOWNLOAD_URL" | tar -xzf - -C $HOME/.local/bin; then
+          echo "✅ Sui CLI downloaded and extracted successfully"
+        else
+          echo "❌ Failed to download Sui CLI from: $DOWNLOAD_URL"
+          echo "Checking if URL exists..."
+          curl -I "$DOWNLOAD_URL" || echo "URL not accessible"
+          exit 1
+        fi
+        
+        # Make executable and add to PATH
+        chmod +x $HOME/.local/bin/sui
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
         
         # Verify installation
-        SUI_BIN="$HOME/.cargo/bin/sui"
-        if [ -f "$SUI_BIN" ]; then
-          echo "✅ Sui CLI installed successfully at: $SUI_BIN"
-          $SUI_BIN --version
-          # Store the binary path for later steps
-          echo "SUI_BINARY_PATH=$SUI_BIN" >> $GITHUB_ENV
+        if [ -f "$HOME/.local/bin/sui" ]; then
+          echo "✅ Sui CLI installed successfully"
+          $HOME/.local/bin/sui --version
+          echo "SUI_BINARY_PATH=$HOME/.local/bin/sui" >> $GITHUB_ENV
         else
           echo "❌ Sui CLI installation failed"
-          echo "Checking cargo installation directory..."
-          ls -la "$HOME/.cargo/bin/" 2>/dev/null || echo "Cargo bin directory not found"
-          echo "PATH: $PATH"
+          echo "Contents of $HOME/.local/bin/:"
+          ls -la "$HOME/.local/bin/"
           exit 1
         fi
         
@@ -113,26 +125,41 @@ jobs:
         
     - name: Download Walrus site-builder
       run: |
-        # Determine system architecture
-        ARCH=$(uname -m)
-        if [ "$ARCH" = "x86_64" ]; then
-          SYSTEM="ubuntu-x64"
-        elif [ "$ARCH" = "aarch64" ]; then
-          SYSTEM="ubuntu-arm64"
+        # For Linux x86_64 GitHub runner, use ubuntu-x86_64 architecture
+        SYSTEM="ubuntu-x86_64"
+        
+        # Download appropriate site-builder binary based on network
+        if [ "$NETWORK" = "mainnet" ]; then
+          DOWNLOAD_URL="https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-$SYSTEM"
         else
-          echo "❌ Unsupported architecture: $ARCH"
+          DOWNLOAD_URL="https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-$SYSTEM"
+        fi
+        
+        echo "Downloading site-builder from: $DOWNLOAD_URL"
+        
+        # Download with error handling
+        if curl -L "$DOWNLOAD_URL" -o site-builder; then
+          echo "✅ Site-builder downloaded successfully"
+        else
+          echo "❌ Failed to download site-builder from: $DOWNLOAD_URL"
+          echo "Checking if URL exists..."
+          curl -I "$DOWNLOAD_URL" || echo "URL not accessible"
           exit 1
         fi
         
-        # Download appropriate site-builder binary
-        if [ "$NETWORK" = "mainnet" ]; then
-          curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-$SYSTEM" -o site-builder
-        else
-          curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-$SYSTEM" -o site-builder
-        fi
-        
         chmod +x site-builder
-        echo "✅ Downloaded site-builder for $SYSTEM ($NETWORK)"
+        
+        # Move to local bin for easier access
+        mv site-builder $HOME/.local/bin/site-builder
+        
+        # Verify installation
+        if $HOME/.local/bin/site-builder --help >/dev/null 2>&1; then
+          echo "✅ Site-builder installed and working for $SYSTEM ($NETWORK)"
+        else
+          echo "❌ Site-builder installation failed or not working"
+          echo "File exists: $(ls -la $HOME/.local/bin/site-builder 2>/dev/null || echo 'No')"
+          exit 1
+        fi
         
     - name: Setup Walrus configuration
       run: |
@@ -142,9 +169,11 @@ jobs:
         
         # Copy repository configs to expected locations
         cp config/walrus-client.yaml ~/.config/walrus/client_config.yaml
-        cp config/walrus-site.yaml ~/.config/walrus/site-config.yaml
+        cp config/walrus-site.yaml ~/.config/walrus/sites-config.yaml
         
         echo "✅ Walrus configuration files installed"
+        echo "Configuration files:"
+        ls -la ~/.config/walrus/
         
     - name: Setup Sui wallet
       env:
@@ -243,11 +272,11 @@ jobs:
       run: |
         echo "🚀 Deploying to Walrus ($NETWORK) for $EPOCHS epochs..."
         
-        # Run deployment and capture output
-        DEPLOY_OUTPUT=$(./site-builder --config ~/.config/walrus/site-config.yaml \
-                                      --context "$NETWORK" \
-                                      deploy ./dist \
-                                      --epochs "$EPOCHS" 2>&1)
+        # Run deployment and capture output using the installed site-builder
+        DEPLOY_OUTPUT=$($HOME/.local/bin/site-builder --config ~/.config/walrus/sites-config.yaml \
+                                                      --context "$NETWORK" \
+                                                      publish ./dist \
+                                                      --epochs "$EPOCHS" 2>&1)
         
         echo "$DEPLOY_OUTPUT"
         
