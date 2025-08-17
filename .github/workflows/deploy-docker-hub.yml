@@ -100,7 +100,9 @@ jobs:
             
             # Import mnemonic into Sui keystore
             echo '🔑 Importing mnemonic into Sui keystore...'
-            IMPORT_OUTPUT=\$(sui keytool import \"\$SUI_MNEMONIC\" ed25519 --json)
+            # Clean the mnemonic by removing surrounding single quotes
+            CLEAN_MNEMONIC=\$(echo \"\$SUI_MNEMONIC\" | sed \"s/^'//; s/'\$//\")
+            IMPORT_OUTPUT=\$(sui keytool import \"\$CLEAN_MNEMONIC\" ed25519 --json)
             IMPORTED_ADDRESS=\$(echo \"\$IMPORT_OUTPUT\" | jq -r '.suiAddress' 2>/dev/null)
             
             echo \"✅ Imported address: \$IMPORTED_ADDRESS\"
