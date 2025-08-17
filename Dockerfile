@@ -58,19 +58,17 @@ RUN ARCH=$(uname -m) && \
 RUN curl -sSf https://install.wal.app | sh -s -- -n testnet
 ENV PATH="/root/.local/bin:$PATH"
 
-# Create directory for site-builder binaries
-RUN mkdir -p /usr/local/walrus/site-builders
-
-# Download site-builder binaries for all combinations
-RUN curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-ubuntu-x64" \
-    -o /usr/local/walrus/site-builders/testnet-x64 && \
-    curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-ubuntu-x64" \
-    -o /usr/local/walrus/site-builders/mainnet-x64 && \
-    curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-ubuntu-arm64" \
-    -o /usr/local/walrus/site-builders/testnet-arm64 && \
-    curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-ubuntu-arm64" \
-    -o /usr/local/walrus/site-builders/mainnet-arm64 && \
-    chmod +x /usr/local/walrus/site-builders/*
+# Download site-builder binaries (only x86_64 Ubuntu binaries are available)
+# Note: Per Walrus documentation, only ubuntu-x86_64 binaries exist for Ubuntu
+RUN echo "📥 Downloading site-builder binaries (ubuntu-x86_64 only available)..." && \
+    curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-testnet-latest-ubuntu-x86_64" \
+        -o /usr/local/bin/site-builder-testnet && \
+    curl -L "https://storage.googleapis.com/mysten-walrus-binaries/site-builder-mainnet-latest-ubuntu-x86_64" \
+        -o /usr/local/bin/site-builder-mainnet && \
+    chmod +x /usr/local/bin/site-builder-* && \
+    # Create a default symlink to testnet version
+    ln -s /usr/local/bin/site-builder-testnet /usr/local/bin/site-builder && \
+    echo "✅ Site-builder binaries installed (ubuntu-x86_64)"
 
 # Copy and install the setup script
 COPY walrus-setup.sh /usr/local/bin/walrus-setup
@@ -81,7 +79,7 @@ RUN sui --version && \
     walrus --version && \
     node --version && \
     npm --version && \
-    ls -la /usr/local/walrus/site-builders/
+    ls -la /usr/local/bin/site-builder*
 
 WORKDIR /workspace
 
