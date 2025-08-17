@@ -101,29 +101,10 @@ jobs:
             # Import mnemonic into Sui keystore
             echo '🔑 Importing mnemonic into Sui keystore...'
             # Clean the mnemonic by removing surrounding single quotes
-            CLEAN_MNEMONIC=\$(echo \"\$SUI_MNEMONIC\" | sed \"s/^'//; s/'\$//\")
-            IMPORT_OUTPUT=\$(sui keytool import \"\$CLEAN_MNEMONIC\" ed25519 --json)
-            IMPORTED_ADDRESS=\$(echo \"\$IMPORT_OUTPUT\" | jq -r '.suiAddress' 2>/dev/null)
-            
-            echo \"✅ Imported address: \$IMPORTED_ADDRESS\"
-            
-            # Check wallet setup
-            echo '💰 Checking Sui wallet setup...'
-            sui client active-address || echo 'Warning: Could not verify active address'
-            
-            # Check wallet balance
-            echo '💰 Checking wallet balance...'
-            BALANCE=\$(sui client gas --json 2>/dev/null | jq -r '.[0].balance // 0' 2>/dev/null || echo '0')
-            echo \"Current SUI balance: \$BALANCE MIST\"
-            
-            if [ \"\$BALANCE\" = '0' ]; then
-              echo '⚠️  Warning: No SUI balance detected. Deployment may fail if gas is needed.'
-            else
-              echo '✅ SUI balance available for gas fees'
-            fi
-            
-            echo '🚀 Starting Walrus deployment...'
-            /usr/local/bin/site-builder --config /root/.config/walrus/site-config.yaml --context \$NETWORK deploy /dist --epochs \$EPOCHS
+            CLEAN_MNEMONIC=$(echo "$SUI_MNEMONIC" | sed "s/^'//; s/'$//")
+            sui keytool import "$CLEAN_MNEMONIC" ed25519
+            (echo "y"; echo ""; echo "0") | sui keytool generate ed25519
+            ./site-builder --config /root/.config/walrus/site-config.yaml  --context $NETWORK deploy /dist --epochs $EPOCHS
           "
         
         echo "✅ Deployment command completed"
